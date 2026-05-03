@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Attendance Log</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <main>
+    <h1>Attendance Log</h1>
+
+    <div class="card" id="auth-card">
+      <label for="pw">Teacher password</label>
+      <input id="pw" type="password" autocomplete="current-password">
+      <button id="auth">Continue</button>
+    </div>
+
+    <div class="card" id="log-card" hidden>
+      <h2>Recent sign-ins</h2>
+      <ul class="signins" id="signins"></ul>
+      <h2>Approved students</h2>
+      <ul class="signins" id="students"></ul>
+      <button class="secondary" id="refresh">Refresh</button>
+    </div>
+  </main>
+
+  <script>
+    const PW_STORAGE = "signin.teacherpw";
+    const $ = id => document.getElementById(id);
+
+    function fmt(ts) {
+      try { return new Date(ts).toLocaleString(); } catch { return ts; }
+    }
+
+    async function load() {
+      const pw = localStorage.getItem(PW_STORAGE) || "";
+      const headers = { "x-teacher-password": pw };
+      const [a, s] = await Promise.all([
+        fetch("/api/attendance", { headers }),
+        fetch("/api/students", { headers }),
+      ]);
+      if (a.status === 401 || s.status === 401) {
+        localStorage.removeItem(PW_STORAGE);
+        $("log-card").hidden = true;
+        $("auth-card").hidden = false;
+        return;
+      }
+      const att = await a.json();
+      const stu = await s.json();
+      $("auth-card").hidden = true;
+      $("log-card").hidden = false;
+      const sl = $("signins");
+      sl.innerHTML = "";
+      for (const r of att.signins) {
+        const li = document.createElement("li");
+        li.innerHTML = `<span>${r.name}</span><span class="muted">${fmt(r.ts)}</span>`;
+        sl.appendChild(li);
+      }
+      const stl = $("students");
+      stl.innerHTML = "";
+      for (const r of stu.students) {
+        const li = document.createElement("li");
+        li.innerHTML = `<span>${r.name}</span><span class="muted">approved ${fmt(r.approved_at)}</span>`;
+        stl.appendChild(li);
+      }
+    }
+
+    $("auth").addEventListener("click", () => {
+      const pw = $("pw").value;
+      if (!pw) return;
+      localStorage.setItem(PW_STORAGE, pw);
+      load();
+    });
+    $("refresh").addEventListener("click", load);
+
+    if (localStorage.getItem(PW_STORAGE)) load();
+  </script>
+</body>
+</html>
