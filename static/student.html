@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>My Sign-In QR</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js"></script>
+</head>
+<body>
+  <main>
+    <h1>My Sign-In QR</h1>
+
+    <div class="card" id="setup">
+      <label for="name">Your full name</label>
+      <input id="name" type="text" autocomplete="name" placeholder="Jane Doe">
+      <button id="generate">Generate my QR</button>
+      <p class="muted">Your name and a unique key are stored in this browser. The teacher must approve you on first scan.</p>
+    </div>
+
+    <div class="card" id="qr-card" hidden>
+      <p><strong id="display-name"></strong></p>
+      <div class="qr"><canvas id="qr"></canvas></div>
+      <p class="muted">Bookmark this page. Reset only if you change phones.</p>
+      <button class="secondary" id="reset">Reset (new key)</button>
+    </div>
+  </main>
+
+  <script>
+    const KEY_STORAGE = "signin.key";
+    const NAME_STORAGE = "signin.name";
+
+    function randomKey() {
+      const bytes = new Uint8Array(16);
+      crypto.getRandomValues(bytes);
+      return Array.from(bytes, b => b.toString(16).padStart(2, "0")).join("");
+    }
+
+    function render(name, key) {
+      document.getElementById("setup").hidden = true;
+      const card = document.getElementById("qr-card");
+      card.hidden = false;
+      document.getElementById("display-name").textContent = name;
+      const payload = JSON.stringify({ n: name, k: key });
+      QRCode.toCanvas(document.getElementById("qr"), payload, { width: 320, margin: 2 });
+    }
+
+    document.getElementById("generate").addEventListener("click", () => {
+      const name = document.getElementById("name").value.trim();
+      if (!name) return;
+      let key = localStorage.getItem(KEY_STORAGE);
+      if (!key) {
+        key = randomKey();
+        localStorage.setItem(KEY_STORAGE, key);
+      }
+      localStorage.setItem(NAME_STORAGE, name);
+      render(name, key);
+    });
+
+    document.getElementById("reset").addEventListener("click", () => {
+      if (!confirm("Generate a new key? You'll need teacher approval again.")) return;
+      localStorage.removeItem(KEY_STORAGE);
+      localStorage.removeItem(NAME_STORAGE);
+      location.reload();
+    });
+
+    const savedName = localStorage.getItem(NAME_STORAGE);
+    const savedKey = localStorage.getItem(KEY_STORAGE);
+    if (savedName && savedKey) render(savedName, savedKey);
+  </script>
+</body>
+</html>

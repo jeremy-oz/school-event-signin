@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Scan Sign-In</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <script src="https://cdn.jsdelivr.net/npm/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+</head>
+<body>
+  <main>
+    <h1>Scan Sign-In</h1>
+
+    <div class="card" id="auth-card">
+      <label for="pw">Teacher password</label>
+      <input id="pw" type="password" autocomplete="current-password">
+      <button id="auth">Continue</button>
+      <p class="muted"><a href="/log">View attendance log</a></p>
+    </div>
+
+    <div class="card" id="scan-card" hidden>
+      <div id="reader"></div>
+      <div id="status"></div>
+      <button class="secondary" id="rescan" hidden>Scan next</button>
+    </div>
+  </main>
+
+  <script>
+    const PW_STORAGE = "signin.teacherpw";
+    let scanner = null;
+    let lastPayload = null;
+    let busy = false;
+
+    const $ = id => document.getElementById(id);
+
+    function setStatus(msg, kind) {
+      const el = $("status");
+      el.innerHTML = "";
+      if (!msg) return;
+      const div = document.createElement("div");
+      div.className = "status " + (kind || "");
+      div.textContent = msg;
+      el.appendChild(div);
+    }
+
+    async function startScanner() {
+      $("auth-card").hidden = true;
+      $("scan-card").hidden = false;
+      scanner = new Html5Qrcode("reader");
+      const config = { fps: 10, qrbox: { width: 260, height: 260 } };
+      try {
+        await scanner.start({ facingMode: "environment" }, config, onScan, () => {});
+      } catch (e) {
+        setStatus("Camera error: " + e.message, "err");
+      }
+    }
+
+    async function pauseScanner() {
+      if (scanner) {
+        try { await scanner.pause(true); } catch {}
+      }
+      $("rescan").hidden = false;
+    }
+
+    async function resumeScanner() {
+      $("rescan").hidden = true;
+      setStatus("");
+      lastPayload = null;
+      if (scanner) {
+        try { await scanner.resume(); } catch {}
+      }
+    }
+
+    async function onScan(text) {
+      if (busy) return;
+      let payload;
+      try {
+        payload = JSON.parse(text);
+        if (!payload.n || !payload.k) throw new Error("missing fields");
+      } catch {
+        setStatus("Not a valid sign-in QR", "err");
+        return;
+      }
+      const sig = payload.n + "|" + payload.k;
+      if (sig === lastPayload) return;
+      lastPayload = sig;
+      busy = true;
+      try {
+        await handleSignin(payload.n, payload.k);
+      } finally {
+        busy = false;
+      }
+    }
+
+    async function handleSignin(name, key) {
+      const res = await fetch("/api/signin", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ name, key }),
+      });
+      if (res.status === 403) {
+        setStatus(`${name}: key does not match. Possible impostor — do not approve.`, "err");
+        await pauseScanner();
+        return;
+      }
+      const data = await res.json();
+      if (data.status === "ok") {
+        setStatus(`Signed in: ${name}`, "ok");
+        await pauseScanner();
+      } else if (data.status === "needs_approval") {
+        if (confirm(`First time seeing "${name}". Approve and lock this key?`)) {
+          await approve(name, key);
+        } else {
+          setStatus(`Skipped ${name}`, "warn");
+          await pauseScanner();
+        }
+      }
+    }
+
+    async function approve(name, key) {
+      const pw = localStorage.getItem(PW_STORAGE) || "";
+      const res = await fetch("/api/approve", {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-teacher-password": pw },
+        body: JSON.stringify({ name, key }),
+      });
+      if (res.status === 401) {
+        localStorage.removeItem(PW_STORAGE);
+        setStatus("Teacher password rejected. Reload to re-enter.", "err");
+        return;
+      }
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        setStatus("Approve failed: " + (err.detail || res.status), "err");
+        return;
+      }
+      setStatus(`Approved & signed in: ${name}`, "ok");
+      await pauseScanner();
+    }
+
+    $("auth").addEventListener("click", () => {
+      const pw = $("pw").value;
+      if (!pw) return;
+      localStorage.setItem(PW_STORAGE, pw);
+      startScanner();
+    });
+
+    $("rescan").addEventListener("click", resumeScanner);
+
+    if (localStorage.getItem(PW_STORAGE)) startScanner();
+  </script>
+</body>
+</html>
