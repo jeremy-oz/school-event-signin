@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Sign In</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <main>
+    <h1>Sign In</h1>
+    <div class="card">
+      <div id="status" class="status">Signing you in…</div>
+      <p class="muted" id="who"></p>
+      <a id="setup-link" href="/me" hidden><button>Set up my QR</button></a>
+    </div>
+  </main>
+
+  <script>
+    const KEY_STORAGE = "signin.key";
+    const NAME_STORAGE = "signin.name";
+    const $ = id => document.getElementById(id);
+
+    function setStatus(msg, kind) {
+      const el = $("status");
+      el.className = "status " + (kind || "");
+      el.textContent = msg;
+    }
+
+    async function go() {
+      const token = location.pathname.split("/").pop();
+      const name = localStorage.getItem(NAME_STORAGE);
+      const key = localStorage.getItem(KEY_STORAGE);
+
+      if (!name || !key) {
+        setStatus("Set up your sign-in QR first, then return.", "warn");
+        $("setup-link").hidden = false;
+        return;
+      }
+      $("who").textContent = name;
+
+      let res;
+      try {
+        res = await fetch("/api/signin", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ name, key, event_token: token }),
+        });
+      } catch (e) {
+        setStatus("No connection. Try again.", "err");
+        return;
+      }
+
+      if (res.status === 410) {
+        setStatus("This event has ended. Ask the teacher for a new QR.", "err");
+        return;
+      }
+      if (res.status === 403) {
+        setStatus("Name and key don't match. Ask the teacher to re-approve.", "err");
+        return;
+      }
+      const data = await res.json().catch(() => ({}));
+      if (data.status === "needs_approval") {
+        setStatus(`First time! Show this phone to your teacher to be approved.`, "warn");
+        return;
+      }
+      if (data.status === "ok") {
+        const t = data.ts ? new Date(data.ts).toLocaleTimeString() : "";
+        setStatus(`Signed in${t ? " at " + t : ""}.`, "ok");
+        return;
+      }
+      setStatus("Unexpected response. Try again.", "err");
+    }
+
+    go();
+  </script>
+</body>
+</html>

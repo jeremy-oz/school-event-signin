@@ -9,15 +9,19 @@
 <body>
   <main>
     <h1>School Event Sign-In</h1>
+
     <div class="card">
-      <h2>Students</h2>
-      <p class="muted">Generate your personal QR code. Show it to the teacher each event.</p>
-      <a href="/me"><button>Open my QR code</button></a>
+      <h2>Teacher</h2>
+      <p class="muted">Display the event QR — students scan it with their phone camera to sign in.</p>
+      <a href="/event"><button>Start / show event QR</button></a>
+      <a href="/scan"><button class="secondary">Scan student QRs (first-time approval)</button></a>
+      <a href="/log"><button class="secondary">Attendance log</button></a>
     </div>
+
     <div class="card">
-      <h2>Teachers</h2>
-      <a href="/scan"><button>Scan QR codes</button></a>
-      <a href="/log"><button class="secondary">View attendance log</button></a>
+      <h2>Student</h2>
+      <p class="muted">Set up once. After that, just point your camera at the teacher's event QR.</p>
+      <a href="/me"><button>Set up my sign-in</button></a>
     </div>
   </main>
 </body>

@@ -4,12 +4,24 @@ A small FastAPI + SQLite mobile web app for signing students into events with a 
 
 ## How it works
 
-- Each student opens `/me` on their phone, types their name, and the page generates a random key stored in `localStorage` plus a QR code containing `{name, key}`. They bookmark the page.
-- The teacher opens `/scan` on their phone, enters a shared password (saved on that device), and points the camera at the QR.
-- First time a student is seen, the teacher confirms; the server locks that key to that name. Future scans by that student auto-sign-in. A scan with the right name but a different key is rejected (impostor protection).
-- `/log` shows recent sign-ins and approved students.
+Two flows. The **event QR** is the default (faster — students self-serve in parallel); the **scan-students** flow is for first-time approvals or as a backup.
 
-QR codes are static (not rotating). Since the teacher is physically present to scan, a screenshot can't be abused remotely, and rotation would hurt reliability (clock skew, battery saver, no signal).
+### Default: students scan an event QR (fast)
+
+1. Student opens `/me` once, types their name. The page generates a random key in `localStorage` and shows their personal QR. They get the teacher to approve them once via `/scan` (one-time per student).
+2. At each event, the teacher opens `/event`, enters the password, hits **Start new event**. The page displays a fresh QR encoding `https://your-domain/e/<token>`.
+3. Students point their phone camera at the QR. Their browser opens the URL, reads their stored `{name, key}`, posts to the server with the event token, and shows "Signed in".
+4. The teacher's `/event` page polls and shows the live attendance list.
+
+Each event has a fresh token; ending the event (or starting a new one) invalidates it. Tokens are not rotating during an event — a forwarded link is reusable until the event ends. Since the teacher is in the room and sees the live list, an absent student appearing there is easy to spot.
+
+### Backup: teacher scans student QRs
+
+`/scan` opens the camera, scans student QRs (same `{name, key}` payload). First-time scans prompt the teacher to approve and lock the key. Useful for first-time approval or when a student can't scan themselves.
+
+### Log
+
+`/log` shows recent sign-ins and the approved roster.
 
 ## Run locally
 
@@ -56,7 +68,10 @@ The whole app state is one file (`attendance.db`). A nightly `cp` to object stor
 
 ## API
 
-- `POST /api/signin` `{name, key}` — `200 {status: "ok"|"needs_approval"}` or `403` on key mismatch.
-- `POST /api/approve` `{name, key}` (header `x-teacher-password`) — locks the key to the name.
-- `GET /api/attendance` (header `x-teacher-password`) — recent sign-ins.
+- `POST /api/signin` `{name, key, event_token?}` — `200 {status: "ok"|"needs_approval"}`, `403` on key mismatch, `410` if `event_token` is given but no event with that token is active.
+- `POST /api/approve` `{name, key}` (header `x-teacher-password`) — locks the key to the name; if an event is active, also records a sign-in for it.
+- `POST /api/event/start` `{label?}` (header `x-teacher-password`) — ends any active event and starts a new one. Returns `{id, token, label, started_at}`.
+- `POST /api/event/end` (header `x-teacher-password`) — ends the active event.
+- `GET /api/event/active` (header `x-teacher-password`) — current active event or `null`.
+- `GET /api/attendance?event_id=N` (header `x-teacher-password`) — recent sign-ins, optionally filtered by event.
 - `GET /api/students` (header `x-teacher-password`) — approved roster.

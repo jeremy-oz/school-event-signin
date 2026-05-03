@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Event QR</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js"></script>
+</head>
+<body>
+  <main>
+    <h1>Event Sign-In</h1>
+
+    <div class="card" id="auth-card">
+      <label for="pw">Teacher password</label>
+      <input id="pw" type="password" autocomplete="current-password">
+      <button id="auth">Continue</button>
+    </div>
+
+    <div class="card" id="start-card" hidden>
+      <label for="label">Event name (optional)</label>
+      <input id="label" type="text" placeholder="Maths Camp Day 1">
+      <button id="start">Start new event</button>
+      <p class="muted">Students point their phone camera at the QR to sign in.</p>
+    </div>
+
+    <div class="card" id="qr-card" hidden>
+      <p><strong id="event-label"></strong></p>
+      <div class="qr"><canvas id="qr"></canvas></div>
+      <p class="muted" id="event-url"></p>
+      <h2>Signed in (<span id="count">0</span>)</h2>
+      <ul class="signins" id="list"></ul>
+      <button class="secondary" id="end">End event</button>
+      <p class="muted"><a href="/scan">Need to approve a new student?</a></p>
+    </div>
+  </main>
+
+  <script>
+    const PW_STORAGE = "signin.teacherpw";
+    const $ = id => document.getElementById(id);
+    let pollTimer = null;
+    let activeEventId = null;
+
+    function authHeaders() {
+      return { "x-teacher-password": localStorage.getItem(PW_STORAGE) || "" };
+    }
+
+    async function loadActive() {
+      const res = await fetch("/api/event/active", { headers: authHeaders() });
+      if (res.status === 401) { showAuth(); return; }
+      const data = await res.json();
+      if (data.active) showEvent(data.active);
+      else showStart();
+    }
+
+    function showAuth() {
+      localStorage.removeItem(PW_STORAGE);
+      $("auth-card").hidden = false;
+      $("start-card").hidden = true;
+      $("qr-card").hidden = true;
+    }
+
+    function showStart() {
+      $("auth-card").hidden = true;
+      $("start-card").hidden = false;
+      $("qr-card").hidden = true;
+      stopPoll();
+    }
+
+    function showEvent(ev) {
+      $("auth-card").hidden = true;
+      $("start-card").hidden = true;
+      $("qr-card").hidden = false;
+      activeEventId = ev.id;
+      const url = `${location.origin}/e/${ev.token}`;
+      $("event-url").textContent = url;
+      $("event-label").textContent = ev.label || `Event #${ev.id}`;
+      QRCode.toCanvas($("qr"), url, { width: 360, margin: 2 });
+      startPoll();
+    }
+
+    async function refresh() {
+      if (activeEventId == null) return;
+      const res = await fetch(`/api/attendance?event_id=${activeEventId}&limit=500`, { headers: authHeaders() });
+      if (!res.ok) return;
+      const data = await res.json();
+      const list = $("list");
+      list.innerHTML = "";
+      for (const r of data.signins) {
+        const li = document.createElement("li");
+        const t = new Date(r.ts).toLocaleTimeString();
+        li.innerHTML = `<span>${r.name}</span><span class="muted">${t}</span>`;
+        list.appendChild(li);
+      }
+      $("count").textContent = data.signins.length;
+    }
+
+    function startPoll() {
+      stopPoll();
+      refresh();
+      pollTimer = setInterval(refresh, 3000);
+    }
+    function stopPoll() {
+      if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+    }
+
+    $("auth").addEventListener("click", () => {
+      const pw = $("pw").value;
+      if (!pw) return;
+      localStorage.setItem(PW_STORAGE, pw);
+      loadActive();
+    });
+
+    $("start").addEventListener("click", async () => {
+      const label = $("label").value.trim();
+      const res = await fetch("/api/event/start", {
+        method: "POST",
+        headers: { "content-type": "application/json", ...authHeaders() },
+        body: JSON.stringify({ label: label || null }),
+      });
+      if (res.status === 401) { showAuth(); return; }
+      const ev = await res.json();
+      showEvent(ev);
+    });
+
+    $("end").addEventListener("click", async () => {
+      if (!confirm("End this event?")) return;
+      await fetch("/api/event/end", { method: "POST", headers: authHeaders() });
+      activeEventId = null;
+      showStart();
+    });
+
+    if (localStorage.getItem(PW_STORAGE)) loadActive();
+  </script>
+</body>
+</html>

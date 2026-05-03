@@ -26,12 +26,21 @@ def init_db() -> None:
                 key TEXT NOT NULL,
                 approved_at TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                token TEXT NOT NULL UNIQUE,
+                label TEXT,
+                started_at TEXT NOT NULL,
+                ended_at TEXT
+            );
             CREATE TABLE IF NOT EXISTS signins (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT NOT NULL,
-                ts TEXT NOT NULL
+                ts TEXT NOT NULL,
+                event_id INTEGER REFERENCES events(id)
             );
             CREATE INDEX IF NOT EXISTS signins_ts ON signins(ts);
+            CREATE INDEX IF NOT EXISTS signins_event ON signins(event_id);
             """
         )
 
@@ -59,11 +68,22 @@ def now_iso() -> str:
 class SigninIn(BaseModel):
     name: str = Field(min_length=1, max_length=100)
     key: str = Field(min_length=8, max_length=128)
+    event_token: str | None = Field(default=None, max_length=64)
 
 
 class ApproveIn(BaseModel):
     name: str = Field(min_length=1, max_length=100)
     key: str = Field(min_length=8, max_length=128)
+
+
+class EventStartIn(BaseModel):
+    label: str | None = Field(default=None, max_length=100)
+
+
+def get_active_event(conn) -> sqlite3.Row | None:
+    return conn.execute(
+        "SELECT * FROM events WHERE ended_at IS NULL ORDER BY id DESC LIMIT 1"
+    ).fetchone()
 
 
 @app.on_event("startup")
@@ -75,13 +95,26 @@ def _startup() -> None:
 def signin(body: SigninIn):
     name = body.name.strip()
     with db() as conn:
+        event_id: int | None = None
+        if body.event_token:
+            ev = conn.execute(
+                "SELECT id FROM events WHERE token = ? AND ended_at IS NULL",
+                (body.event_token,),
+            ).fetchone()
+            if ev is None:
+                raise HTTPException(status_code=410, detail="event is not active")
+            event_id = ev["id"]
         row = conn.execute("SELECT key FROM students WHERE name = ?", (name,)).fetchone()
         if row is None:
             return {"status": "needs_approval", "name": name}
         if not secrets.compare_digest(row["key"], body.key):
             raise HTTPException(status_code=403, detail="key does not match this name")
-        conn.execute("INSERT INTO signins(name, ts) VALUES(?, ?)", (name, now_iso()))
-        return {"status": "ok", "name": name, "ts": now_iso()}
+        ts = now_iso()
+        conn.execute(
+            "INSERT INTO signins(name, ts, event_id) VALUES(?, ?, ?)",
+            (name, ts, event_id),
+        )
+        return {"status": "ok", "name": name, "ts": ts, "event_id": event_id}
 
 
 @app.post("/api/approve", dependencies=[Depends(require_teacher)])
@@ -96,18 +129,56 @@ def approve(body: ApproveIn):
             "INSERT INTO students(name, key, approved_at) VALUES(?, ?, ?)",
             (name, body.key, ts),
         )
-        conn.execute("INSERT INTO signins(name, ts) VALUES(?, ?)", (name, ts))
+        ev = get_active_event(conn)
+        event_id = ev["id"] if ev else None
+        conn.execute(
+            "INSERT INTO signins(name, ts, event_id) VALUES(?, ?, ?)",
+            (name, ts, event_id),
+        )
         return {"status": "approved", "name": name, "ts": ts}
 
 
 @app.get("/api/attendance", dependencies=[Depends(require_teacher)])
-def attendance(limit: int = 200):
+def attendance(limit: int = 200, event_id: int | None = None):
     limit = max(1, min(limit, 1000))
     with db() as conn:
-        rows = conn.execute(
-            "SELECT name, ts FROM signins ORDER BY id DESC LIMIT ?", (limit,)
-        ).fetchall()
+        if event_id is None:
+            rows = conn.execute(
+                "SELECT name, ts FROM signins ORDER BY id DESC LIMIT ?", (limit,)
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT name, ts FROM signins WHERE event_id = ? ORDER BY id DESC LIMIT ?",
+                (event_id, limit),
+            ).fetchall()
         return {"signins": [dict(r) for r in rows]}
+
+
+@app.post("/api/event/start", dependencies=[Depends(require_teacher)])
+def event_start(body: EventStartIn):
+    ts = now_iso()
+    with db() as conn:
+        conn.execute("UPDATE events SET ended_at = ? WHERE ended_at IS NULL", (ts,))
+        token = secrets.token_urlsafe(12)
+        cur = conn.execute(
+            "INSERT INTO events(token, label, started_at) VALUES(?, ?, ?)",
+            (token, body.label, ts),
+        )
+        return {"id": cur.lastrowid, "token": token, "label": body.label, "started_at": ts}
+
+
+@app.post("/api/event/end", dependencies=[Depends(require_teacher)])
+def event_end():
+    with db() as conn:
+        conn.execute("UPDATE events SET ended_at = ? WHERE ended_at IS NULL", (now_iso(),))
+        return {"status": "ended"}
+
+
+@app.get("/api/event/active", dependencies=[Depends(require_teacher)])
+def event_active():
+    with db() as conn:
+        ev = get_active_event(conn)
+        return {"active": dict(ev) if ev else None}
 
 
 @app.get("/api/students", dependencies=[Depends(require_teacher)])
@@ -140,6 +211,16 @@ def scan_page():
 @app.get("/log")
 def log_page():
     return FileResponse(STATIC_DIR / "log.html")
+
+
+@app.get("/event")
+def event_page():
+    return FileResponse(STATIC_DIR / "event.html")
+
+
+@app.get("/e/{token}")
+def event_signin_page(token: str):
+    return FileResponse(STATIC_DIR / "signin.html")
 
 
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
